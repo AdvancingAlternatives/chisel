@@ -1,6 +1,7 @@
 package coordinator
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -88,5 +89,59 @@ func (c *Client) Lookup(ctx context.Context, hostname string) (*Session, error) 
 	default:
 		body, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("Lookup: unexpected status %d: %s", resp.StatusCode, string(body))
+	}
+}
+
+// Activate posts the bound port + remote address for a session,
+// transitioning it pending->active on the coordinator side.
+//
+// Returns nil on 200.
+// Returns err wrapping ErrNotFound on 404 (session gone — race condition).
+// Returns err wrapping ErrConflict on 409 (port mismatch / hostname
+// mismatch / wrong state — caller should tear down the proxy).
+// Returns err wrapping ErrAuth on 401/403 (cert bug).
+// Returns err wrapping ErrTransient on 5xx / transport failure.
+func (c *Client) Activate(ctx context.Context, sessionID, hostname string, port int, remoteAddr string) error {
+	body, err := json.Marshal(ActivateRequest{
+		TargetHostname:   hostname,
+		ActualPortBound:  port,
+		ClientRemoteAddr: remoteAddr,
+	})
+	if err != nil {
+		return fmt.Errorf("Activate: marshal: %w", err)
+	}
+
+	reqURL := c.baseURL + fmt.Sprintf(PathActivate, url.PathEscape(sessionID))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("Activate: build request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("Activate: %w: %v", ErrTransient, err)
+	}
+	defer resp.Body.Close()
+
+	switch {
+	case resp.StatusCode == http.StatusOK:
+		// Drain body so the connection can be reused by the next call.
+		io.Copy(io.Discard, resp.Body)
+		return nil
+	case resp.StatusCode == http.StatusNotFound:
+		return fmt.Errorf("Activate: %w", ErrNotFound)
+	case resp.StatusCode == http.StatusConflict:
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("Activate: %w: %s", ErrConflict, string(respBody))
+	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("Activate: %w: %s", ErrAuth, string(respBody))
+	case resp.StatusCode >= 500:
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("Activate: %w: %d %s", ErrTransient, resp.StatusCode, string(respBody))
+	default:
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("Activate: unexpected status %d: %s", resp.StatusCode, string(respBody))
 	}
 }

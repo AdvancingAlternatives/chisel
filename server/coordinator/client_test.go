@@ -158,3 +158,55 @@ func TestLookupTransportFailureReturnsErrTransient(t *testing.T) {
 		t.Errorf("err = %v, want ErrTransient", err)
 	}
 }
+
+func TestActivate200Success(t *testing.T) {
+	var got ActivateRequest
+	_, c := fakeCoordinatorServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("method = %s", r.Method)
+		}
+		if r.URL.Path != "/sessions/ses_abc/activate" {
+			t.Errorf("path = %q", r.URL.Path)
+		}
+		json.NewDecoder(r.Body).Decode(&got)
+		w.WriteHeader(http.StatusOK)
+	})
+
+	err := c.Activate(context.Background(), "ses_abc", "lcm-a57d", 22099, "10.5.6.7:55432")
+	if err != nil {
+		t.Fatalf("Activate: %v", err)
+	}
+	if got.TargetHostname != "lcm-a57d" || got.ActualPortBound != 22099 || got.ClientRemoteAddr != "10.5.6.7:55432" {
+		t.Errorf("activate body = %+v", got)
+	}
+}
+
+func TestActivate409ReturnsErrConflict(t *testing.T) {
+	_, c := fakeCoordinatorServer(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "hostname mismatch", http.StatusConflict)
+	})
+	err := c.Activate(context.Background(), "ses_abc", "lcm-a57d", 22099, "x")
+	if !errors.Is(err, ErrConflict) {
+		t.Errorf("err = %v, want ErrConflict", err)
+	}
+}
+
+func TestActivate404ReturnsErrNotFound(t *testing.T) {
+	_, c := fakeCoordinatorServer(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "session gone", http.StatusNotFound)
+	})
+	err := c.Activate(context.Background(), "ses_abc", "lcm-a57d", 22099, "x")
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestActivate503ReturnsErrTransient(t *testing.T) {
+	_, c := fakeCoordinatorServer(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "down", http.StatusServiceUnavailable)
+	})
+	err := c.Activate(context.Background(), "ses_abc", "lcm-a57d", 22099, "x")
+	if !errors.Is(err, ErrTransient) {
+		t.Errorf("err = %v, want ErrTransient", err)
+	}
+}
