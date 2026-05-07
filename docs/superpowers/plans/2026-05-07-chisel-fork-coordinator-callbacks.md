@@ -39,6 +39,36 @@ If the version is `< v0.6.0`, STOP and update `go.mod` first. The classifier in 
 
 This phase produces the generic proxy-lifecycle-hook surface. Independently mergeable upstream as "complete proxy lifecycle observability." No coordinator dependency.
 
+### Phase 1 convention — applies to all `share/tunnel/` code
+
+Two rules tighter than the rest of the plan, because Phase 1 is the upstream-PR target and code that lands in `share/tunnel/` may eventually ship to consumers who don't know our internal vocabulary:
+
+1. **Doc comments must be generic.** Describe the type/function/value in terms of the SSH tunnel's lifecycle, NOT in terms of LCMs, bastion's coordinator, systemctl, or any AdvancingAlternatives concept. A reader of `go doc github.com/jpillora/chisel/share/tunnel` should understand the API without our internal context.
+
+2. **`// AA-fork:` markers must NOT be the first line of a doc comment block on an exported symbol.** Go's godoc parser uses contiguous `//` comments above a declaration as the rendered API documentation. Markers in that position become permanent godoc noise.
+
+   For new files (like `disconnect.go`), use a single file-level header above `package tunnel` with a blank line between:
+   ```go
+   // AA-fork: this file was added by AdvancingAlternatives's chisel fork
+   // to expose proxy-lifecycle observability...
+
+   package tunnel
+   ```
+
+   For modifications to existing files (like `tunnel.go`), put per-symbol markers on a separate `// AA-fork` line ABOVE the doc comment, with a blank line between:
+   ```go
+   // AA-fork
+
+   // OnRemoteBound fires after a Proxy's net.Listener is bound...
+   OnRemoteBound func(ctx context.Context, ...) error
+   ```
+
+   For unexported symbols (lowercase names like `classifyDisconnect`, `boundListener`, `tunnelConfig`), the marker can stay inline in the doc comment — godoc doesn't render unexported symbols, so there's no API-surface concern.
+
+The pseudocode in Tasks 3-6 below uses inline `// AA-fork:` markers as a shorthand for "this is fork-added code." When implementing, follow rules 1+2 above for actual placement.
+
+The Task 1 implementation already follows these rules and is the reference example.
+
 ### Task 1: Add `DisconnectReason` type + sentinel error
 
 **Files:**
