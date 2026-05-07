@@ -254,6 +254,21 @@ func (s *Server) authUser(c ssh.ConnMetadata, password []byte) (*ssh.Permissions
 	return nil, nil
 }
 
+// AA-fork: coordLog is a small wrapper around Server's logger that respects
+// a level argument. Used by handleWebsocket's coordinator-error mapping to
+// route messages to INFO / WARN / ERROR per the design doc's table.
+func (s *Server) coordLog(level, format string, args ...interface{}) {
+	switch level {
+	case "error":
+		s.Errorf(format, args...)
+	case "warn":
+		// chisel's cio.Logger doesn't have Warnf — log as Info with a prefix.
+		s.Infof("WARN "+format, args...)
+	default:
+		s.Infof(format, args...)
+	}
+}
+
 // AddUser adds a new user into the server user index
 func (s *Server) AddUser(user, pass string, addrs ...string) error {
 	authorizedAddrs := []*regexp.Regexp{}

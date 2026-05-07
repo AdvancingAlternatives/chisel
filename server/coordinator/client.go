@@ -33,7 +33,7 @@ func New(cfg *Config) (*Client, error) {
 		return nil, err
 	}
 
-	timeout := cfg.timeoutOrDefault()
+	timeout := cfg.TimeoutOrDefault()
 	httpClient := &http.Client{
 		Timeout: timeout,
 		Transport: &http.Transport{

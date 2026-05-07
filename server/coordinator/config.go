@@ -54,8 +54,8 @@ func (c *Config) ParseURL() (*url.URL, error) {
 	return u, nil
 }
 
-// timeoutOrDefault returns Timeout if set, otherwise the 5s default.
-func (c *Config) timeoutOrDefault() time.Duration {
+// TimeoutOrDefault returns Timeout if set, otherwise the 5s default.
+func (c *Config) TimeoutOrDefault() time.Duration {
 	if c.Timeout > 0 {
 		return c.Timeout
 	}

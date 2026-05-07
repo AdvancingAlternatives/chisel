@@ -5,12 +5,16 @@
 package chserver
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"net"
 	"strconv"
+	"time"
 
 	"github.com/jpillora/chisel/server/coordinator"
 	"github.com/jpillora/chisel/share/settings"
+	"github.com/jpillora/chisel/share/tunnel"
 )
 
 // overrideReverseRemotePort finds the first reverse remote in remotes and
@@ -51,5 +55,41 @@ func rejectMessage(err error) string {
 		return "state divergence on activate, see coordinator logs"
 	default:
 		return "coordinator error"
+	}
+}
+
+// coordinatorBindHook returns a closure suitable for tunnel.Config.OnRemoteBound
+// that posts an Activate to the coordinator and propagates errors. Captures
+// sessionID, hostname, and remoteAddr in the closure so they're available
+// at bind time.
+func coordinatorBindHook(client *coordinator.Client, sessionID, hostname, remoteAddr string) func(context.Context, *settings.Remote, net.Listener) error {
+	return func(ctx context.Context, r *settings.Remote, ln net.Listener) error {
+		// Use the listener's Addr to get the actually-bound port (relevant
+		// when the requested port was 0 / OS-picked, though in coordinator
+		// mode we override to the allocated port so they should match).
+		port := r.RemotePortInt()
+		if tcp, ok := ln.Addr().(*net.TCPAddr); ok && tcp.Port != 0 {
+			port = tcp.Port
+		}
+		return client.Activate(ctx, sessionID, hostname, port, remoteAddr)
+	}
+}
+
+// coordinatorUnbindHook returns a closure suitable for tunnel.Config.OnRemoteUnbound
+// that posts a Deactivate to the coordinator. Errors are logged but not
+// propagated — the coordinator's TTL fallback handles cleanup if this fails.
+//
+// The deactivate call uses a fresh background context with the coordinator's
+// timeout, NOT the proxy's ctx (which is already cancelled by the time
+// OnRemoteUnbound fires — its cause is what tells us the disconnect reason).
+func coordinatorUnbindHook(client *coordinator.Client, log func(format string, args ...interface{}), timeout time.Duration, sessionID, hostname string) func(*settings.Remote, tunnel.DisconnectReason) {
+	return func(r *settings.Remote, reason tunnel.DisconnectReason) {
+		port := r.RemotePortInt()
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		if err := client.Deactivate(ctx, sessionID, hostname, port, string(reason)); err != nil {
+			log("deactivate failed sessionID=%s hostname=%s port=%d reason=%s err=%v",
+				sessionID, hostname, port, reason, err)
+		}
 	}
 }

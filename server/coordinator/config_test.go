@@ -49,12 +49,12 @@ func TestParseURLRejectsMalformed(t *testing.T) {
 
 func TestConfigDefaultTimeout(t *testing.T) {
 	cfg := &Config{URL: "https://x:8443"}
-	if cfg.timeoutOrDefault() != 5*time.Second {
-		t.Errorf("default timeout = %v, want 5s", cfg.timeoutOrDefault())
+	if cfg.TimeoutOrDefault() != 5*time.Second {
+		t.Errorf("default timeout = %v, want 5s", cfg.TimeoutOrDefault())
 	}
 
 	cfg.Timeout = 12 * time.Second
-	if cfg.timeoutOrDefault() != 12*time.Second {
-		t.Errorf("explicit timeout = %v, want 12s", cfg.timeoutOrDefault())
+	if cfg.TimeoutOrDefault() != 12*time.Second {
+		t.Errorf("explicit timeout = %v, want 12s", cfg.TimeoutOrDefault())
 	}
 }
