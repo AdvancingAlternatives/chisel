@@ -136,3 +136,23 @@ func TestRemoteDecode(t *testing.T) {
 		}
 	}
 }
+
+func TestRemotePortInt(t *testing.T) {
+	cases := []struct {
+		name      string
+		remote    Remote
+		want      int
+	}{
+		{"valid number", Remote{RemotePort: "22099"}, 22099},
+		{"empty string", Remote{RemotePort: ""}, 0},
+		{"non-numeric", Remote{RemotePort: "socks"}, 0},
+		{"zero", Remote{RemotePort: "0"}, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.remote.RemotePortInt(); got != tc.want {
+				t.Errorf("RemotePortInt() = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
