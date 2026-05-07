@@ -1,8 +1,12 @@
 package coordinator
 
 import (
+	"context"
 	"crypto/tls"
+	"encoding/json"
+	"errors"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 )
@@ -72,5 +76,85 @@ func TestNewClientUsesTLS13Minimum(t *testing.T) {
 	}
 	if tlsCfg.MinVersion != tls.VersionTLS13 {
 		t.Errorf("MinVersion = %d, want TLS13 (%d)", tlsCfg.MinVersion, tls.VersionTLS13)
+	}
+}
+
+// fakeCoordinatorServer returns an httptest.Server with the given handler.
+// Wires the coordinator.Client to it, replacing the http.Transport's TLS
+// config so the test doesn't need real certs (the server is plain HTTP).
+func fakeCoordinatorServer(t *testing.T, handler http.HandlerFunc) (*httptest.Server, *Client) {
+	t.Helper()
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+
+	c := &Client{
+		baseURL: srv.URL,
+		http:    srv.Client(),
+		timeout: 2 * time.Second,
+	}
+	return srv, c
+}
+
+func TestLookup200ReturnsSession(t *testing.T) {
+	_, c := fakeCoordinatorServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/sessions/lookup" {
+			t.Errorf("path = %q", r.URL.Path)
+		}
+		if r.URL.Query().Get("target_hostname") != "lcm-a57d" {
+			t.Errorf("target_hostname query = %q", r.URL.Query().Get("target_hostname"))
+		}
+		json.NewEncoder(w).Encode(Session{
+			SessionID:      "ses_xyz",
+			Port:           22099,
+			State:          "pending",
+			TargetHostname: "lcm-a57d",
+		})
+	})
+
+	s, err := c.Lookup(context.Background(), "lcm-a57d")
+	if err != nil {
+		t.Fatalf("Lookup: %v", err)
+	}
+	if s.SessionID != "ses_xyz" || s.Port != 22099 {
+		t.Errorf("got %+v", s)
+	}
+}
+
+func TestLookup404ReturnsErrNotFound(t *testing.T) {
+	_, c := fakeCoordinatorServer(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "no pending session", http.StatusNotFound)
+	})
+	_, err := c.Lookup(context.Background(), "lcm-x")
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestLookup401ReturnsErrAuth(t *testing.T) {
+	_, c := fakeCoordinatorServer(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	})
+	_, err := c.Lookup(context.Background(), "lcm-x")
+	if !errors.Is(err, ErrAuth) {
+		t.Errorf("err = %v, want ErrAuth", err)
+	}
+}
+
+func TestLookup500ReturnsErrTransient(t *testing.T) {
+	_, c := fakeCoordinatorServer(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	})
+	_, err := c.Lookup(context.Background(), "lcm-x")
+	if !errors.Is(err, ErrTransient) {
+		t.Errorf("err = %v, want ErrTransient", err)
+	}
+}
+
+func TestLookupTransportFailureReturnsErrTransient(t *testing.T) {
+	srv, c := fakeCoordinatorServer(t, func(w http.ResponseWriter, r *http.Request) {})
+	srv.Close() // server is now down; next call gets connection-refused
+	_, err := c.Lookup(context.Background(), "lcm-x")
+	if !errors.Is(err, ErrTransient) {
+		t.Errorf("err = %v, want ErrTransient", err)
 	}
 }
