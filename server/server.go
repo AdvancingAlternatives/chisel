@@ -3,6 +3,7 @@ package chserver
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"net/http/httputil"
@@ -13,10 +14,12 @@ import (
 
 	"github.com/gorilla/websocket"
 	chshare "github.com/jpillora/chisel/share"
+	"github.com/jpillora/chisel/server/coordinator"
 	"github.com/jpillora/chisel/share/ccrypto"
 	"github.com/jpillora/chisel/share/cio"
 	"github.com/jpillora/chisel/share/cnet"
 	"github.com/jpillora/chisel/share/settings"
+	"github.com/jpillora/chisel/share/tunnel"
 	"github.com/jpillora/requestlog"
 	"golang.org/x/crypto/ssh"
 )
@@ -32,6 +35,13 @@ type Config struct {
 	Reverse   bool
 	KeepAlive time.Duration
 	TLS       TLSConfig
+
+	// AA-fork: optional coordinator integration. When non-nil, the server
+	// consults this coordinator at every reverse-tunnel connect to gate
+	// the request, override the tunnel port to a coordinator-allocated
+	// value, and report lifecycle events. When nil, the server runs in
+	// upstream-compatible mode — the coordinator code paths are bypassed.
+	Coordinator *coordinator.Config
 }
 
 // Server respresent a chisel service
@@ -45,6 +55,14 @@ type Server struct {
 	sessions     *settings.Users
 	sshConfig    *ssh.ServerConfig
 	users        *settings.UserIndex
+
+	// AA-fork: coordinator integration state. coordClient is nil iff
+	// config.Coordinator == nil. shutdownCtx is cancelled with cause
+	// tunnel.ErrServerShutdown by Close() so OnRemoteUnbound callbacks
+	// can distinguish server-initiated closes via context.Cause(ctx).
+	coordClient    *coordinator.Client
+	shutdownCtx    context.Context
+	shutdownCancel context.CancelCauseFunc
 }
 
 var upgrader = websocket.Upgrader{
@@ -55,11 +73,17 @@ var upgrader = websocket.Upgrader{
 
 // NewServer creates and returns a new chisel server
 func NewServer(c *Config) (*Server, error) {
+	// AA-fork: initialise the shutdown context so Close() can propagate a
+	// cancel cause to in-flight handlers' OnRemoteUnbound callbacks.
+	shutdownCtx, shutdownCancel := context.WithCancelCause(context.Background())
+
 	server := &Server{
-		config:     c,
-		httpServer: cnet.NewHTTPServer(),
-		Logger:     cio.NewLogger("server"),
-		sessions:   settings.NewUsers(),
+		config:         c,
+		httpServer:     cnet.NewHTTPServer(),
+		Logger:         cio.NewLogger("server"),
+		sessions:       settings.NewUsers(),
+		shutdownCtx:    shutdownCtx,
+		shutdownCancel: shutdownCancel,
 	}
 	server.Info = true
 	server.users = settings.NewUserIndex(server.Logger)
@@ -140,6 +164,15 @@ func NewServer(c *Config) (*Server, error) {
 	if c.Reverse {
 		server.Infof("Reverse tunnelling enabled")
 	}
+	// AA-fork: build the coordinator client if configured.
+	if c.Coordinator != nil {
+		client, err := coordinator.New(c.Coordinator)
+		if err != nil {
+			return nil, fmt.Errorf("coordinator: %w", err)
+		}
+		server.coordClient = client
+		server.Infof("Coordinator integration enabled: %s", c.Coordinator.URL)
+	}
 	return server, nil
 }
 
@@ -185,8 +218,15 @@ func (s *Server) Wait() error {
 	return s.httpServer.Wait()
 }
 
-// Close forcibly closes the http server
+// Close forcibly closes the http server.
+//
+// AA-fork: cancels shutdownCtx with tunnel.ErrServerShutdown as the cause
+// so OnRemoteUnbound callbacks can classify server-initiated closes
+// via context.Cause(ctx). The cancel is best-effort (callers may invoke
+// Close multiple times); cancel-cause is safe to call multiple times
+// with later calls being no-ops.
 func (s *Server) Close() error {
+	s.shutdownCancel(tunnel.ErrServerShutdown)
 	return s.httpServer.Close()
 }
 
