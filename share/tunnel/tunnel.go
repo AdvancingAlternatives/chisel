@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -173,16 +174,35 @@ func (t *Tunnel) BindRemotes(ctx context.Context, remotes []*settings.Remote) er
 	if !t.Inbound {
 		return errors.New("inbound connections blocked")
 	}
-	proxies := make([]*Proxy, len(remotes))
-	for i, remote := range remotes {
+	proxies := make([]*Proxy, 0, len(remotes))
+	for _, remote := range remotes {
 		p, err := NewProxy(t.Logger, t, t.proxyCount, remote)
 		if err != nil {
+			// Tear down already-bound proxies before returning.
+			for _, prev := range proxies {
+				prev.Close()
+			}
 			return err
 		}
-		proxies[i] = p
+
+		// AA-fork: OnRemoteBound runs after listener bind + before accept loop.
+		// Callback err tears down THIS proxy only (and any previously-bound
+		// proxies in this BindRemotes call); other tunnels are unaffected.
+		if t.Config.OnRemoteBound != nil {
+			ln := p.boundListener()
+			if cbErr := t.Config.OnRemoteBound(ctx, remote, ln); cbErr != nil {
+				p.Close()
+				for _, prev := range proxies {
+					prev.Close()
+				}
+				return fmt.Errorf("OnRemoteBound: %w", cbErr)
+			}
+		}
+
+		proxies = append(proxies, p)
 		t.proxyCount++
 	}
-	//TODO: handle tunnel close
+
 	eg, ctx := errgroup.WithContext(ctx)
 	for _, proxy := range proxies {
 		p := proxy
