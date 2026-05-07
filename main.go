@@ -13,6 +13,7 @@ import (
 
 	chclient "github.com/jpillora/chisel/client"
 	chserver "github.com/jpillora/chisel/server"
+	"github.com/jpillora/chisel/server/coordinator"
 	chshare "github.com/jpillora/chisel/share"
 	"github.com/jpillora/chisel/share/ccrypto"
 	"github.com/jpillora/chisel/share/cos"
@@ -171,9 +172,25 @@ var serverHelp = `
     provide a certificate notification email by setting CHISEL_LE_EMAIL.
 
     --tls-ca, a path to a PEM encoded CA certificate bundle or a directory
-    holding multiple PEM encode CA certificate bundle files, which is used to 
-    validate client connections. The provided CA certificates will be used 
-    instead of the system roots. This is commonly used to implement mutual-TLS. 
+    holding multiple PEM encode CA certificate bundle files, which is used to
+    validate client connections. The provided CA certificates will be used
+    instead of the system roots. This is commonly used to implement mutual-TLS.
+
+    --coordinator-url, AA-fork: base URL of the bastion coordinator (e.g.
+    https://coordinator:8443). When unset, chisel runs in upstream-compatible
+    mode without coordinator integration. When set, all reverse-tunnel
+    connect requests consult the coordinator at /sessions/lookup before
+    binding. Required to be https.
+
+    --coordinator-mtls-cert, --coordinator-mtls-key, --coordinator-mtls-ca,
+    AA-fork: paths to the chisel-server's client certificate, key, and the
+    coordinator's CA cert respectively. Required when --coordinator-url is
+    set. The chisel-server CN must match the coordinator's authz mapping
+    (typically "bastion-chisel"). See bastion's docs/chisel-fork-contract.md.
+
+    --coordinator-timeout, AA-fork: per-call HTTP timeout for coordinator
+    requests. Default 5s. Anything slower is a coordinator-sick signal —
+    fail fast and let the LCM retry rather than block the operator's SSH.
 ` + commonHelp
 
 func server(args []string) {
@@ -194,6 +211,14 @@ func server(args []string) {
 	flags.StringVar(&config.TLS.Cert, "tls-cert", "", "")
 	flags.Var(multiFlag{&config.TLS.Domains}, "tls-domain", "")
 	flags.StringVar(&config.TLS.CA, "tls-ca", "", "")
+
+	// AA-fork: coordinator integration flags. When --coordinator-url is empty,
+	// chisel runs in upstream-compatible mode (Config.Coordinator stays nil).
+	coordinatorURL := flags.String("coordinator-url", "", "")
+	coordinatorMTLSCert := flags.String("coordinator-mtls-cert", "", "")
+	coordinatorMTLSKey := flags.String("coordinator-mtls-key", "", "")
+	coordinatorMTLSCA := flags.String("coordinator-mtls-ca", "", "")
+	coordinatorTimeout := flags.Duration("coordinator-timeout", 5*time.Second, "")
 
 	host := flags.String("host", "", "")
 	p := flags.String("p", "", "")
@@ -243,6 +268,17 @@ func server(args []string) {
 	}
 	if config.Auth == "" {
 		config.Auth = os.Getenv("AUTH")
+	}
+	// AA-fork: wire coordinator integration when --coordinator-url is set.
+	// Leave config.Coordinator nil otherwise to preserve upstream behavior.
+	if *coordinatorURL != "" {
+		config.Coordinator = &coordinator.Config{
+			URL:          *coordinatorURL,
+			MTLSCertFile: *coordinatorMTLSCert,
+			MTLSKeyFile:  *coordinatorMTLSKey,
+			MTLSCAFile:   *coordinatorMTLSCA,
+			Timeout:      *coordinatorTimeout,
+		}
 	}
 	s, err := chserver.NewServer(config)
 	if err != nil {
