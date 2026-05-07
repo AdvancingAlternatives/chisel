@@ -3360,6 +3360,20 @@ NewServer; --coordinator-url empty leaves Config.Coordinator nil
 
 End-to-end tests that boot a real chisel-server with a fake coordinator (httptest.Server). Each test scenario exercises one design property.
 
+### Phase 5 convention — chisel-client doesn't have a Hostname field
+
+The plan's pseudocode below uses `Hostname: "lcm-..."` on `chclient.Config` for clarity, but **`chclient.Config` doesn't actually have a Hostname field** — chisel's client surfaces the `--hostname` value via the HTTP `Host` header in `Headers`. Substitute every `Hostname: X` in chclient.Config literals with:
+
+```go
+Headers: http.Header{"Host": []string{X}},
+```
+
+Where `X` is the literal/var the plan shows. Add `"net/http"` to the test file's imports if not already present.
+
+For example, the plan's `Hostname: "lcm-a57d"` becomes `Headers: http.Header{"Host": []string{"lcm-a57d"}}`. The plan's `Hostname: hostname` (variable form) becomes `Headers: http.Header{"Host": []string{hostname}}`.
+
+Server-side, `req.Host` (used by handleWebsocket's coordinator branch) reads exactly this Host header — semantically equivalent to the upstream `--hostname` flag's behavior. No changes to chisel-server code needed.
+
 ### Task 24: Test infrastructure — fake coordinator
 
 **Files:**
