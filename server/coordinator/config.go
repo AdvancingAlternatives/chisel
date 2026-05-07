@@ -1,8 +1,11 @@
 package coordinator
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"net/url"
+	"os"
 	"time"
 )
 
@@ -57,4 +60,35 @@ func (c *Config) timeoutOrDefault() time.Duration {
 		return c.Timeout
 	}
 	return 5 * time.Second
+}
+
+// LoadMTLS reads the cert/key/ca files from disk and returns a *tls.Config
+// wired for client mTLS to the coordinator. Errors out cleanly on missing
+// files, malformed PEM, or empty path fields. Called once at chisel-server
+// startup; the returned *tls.Config is reused across all coordinator HTTP
+// calls.
+func (c *Config) LoadMTLS() (*tls.Config, error) {
+	if c.MTLSCertFile == "" || c.MTLSKeyFile == "" || c.MTLSCAFile == "" {
+		return nil, fmt.Errorf("mTLS cert/key/ca paths must all be set")
+	}
+
+	cert, err := tls.LoadX509KeyPair(c.MTLSCertFile, c.MTLSKeyFile)
+	if err != nil {
+		return nil, fmt.Errorf("load cert/key: %w", err)
+	}
+
+	caPEM, err := os.ReadFile(c.MTLSCAFile)
+	if err != nil {
+		return nil, fmt.Errorf("read CA: %w", err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(caPEM) {
+		return nil, fmt.Errorf("CA file %q has no valid PEM certs", c.MTLSCAFile)
+	}
+
+	return &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		RootCAs:      pool,
+		MinVersion:   tls.VersionTLS13,
+	}, nil
 }
