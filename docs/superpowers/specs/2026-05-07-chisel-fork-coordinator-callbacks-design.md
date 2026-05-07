@@ -110,21 +110,35 @@ After `proxies[i] = p` in the build loop, before the run-goroutine spawn, call `
 
 **`Proxy.Run` modifications** (`tunnel_in_proxy.go`)
 
-After `Run` exits, call `OnRemoteUnbound` if set. The reason comes from a `disconnectReason` field on `Tunnel` that defaults to `DisconnectClient` and can be overridden by the caller before the goroutines exit.
-
-**New `Tunnel` method**:
+After `Run` exits, call `OnRemoteUnbound` if set. The reason is derived **at the callback site** by inspecting the proxy's context via `context.Cause(ctx)` — no setter, no field on Tunnel, no race possible. Classification:
 
 ```go
-// SetDisconnectReason overrides the reason passed to OnRemoteUnbound
-// callbacks. Must be called before BindRemotes' goroutines exit. The
-// classifier in handleWebsocket calls this from the deferred path that
-// fires after eg.Wait() returns, with reason derived from the eg err
-// (nil → Client, EOF → Client, ctx.Canceled or shuttingDown.Load() →
-// ServerShutdown, other err → ConnectionLost).
-func (t *Tunnel) SetDisconnectReason(reason DisconnectReason)
+func classifyDisconnect(ctx context.Context) DisconnectReason {
+    cause := context.Cause(ctx)
+    switch {
+    case errors.Is(cause, ErrServerShutdown):
+        return DisconnectServerShutdown
+    case cause == nil || errors.Is(cause, context.Canceled) || isEOF(cause):
+        return DisconnectClient
+    default:
+        return DisconnectConnectionLost
+    }
+}
 ```
 
-Stored on the Tunnel struct as `disconnectReason DisconnectReason` (default zero-value parsed as `DisconnectClient` when empty). The OnRemoteUnbound callback site reads this field at exit time.
+This works because both close paths flow into the proxy's ctx as cancellation causes:
+- **Server shutdown:** `Server.Close()` calls `shutdownCancel(ErrServerShutdown)` on the server's root cancel-cause-context, which propagates to every in-flight handler's derived context. Cause = `ErrServerShutdown`.
+- **SSH conn close:** chisel's existing `errgroup.WithContext` wraps `BindSSH`'s return error as the group's cancel cause (errgroup uses `context.WithCancelCause` since `golang.org/x/sync v0.6+`). `BindSSH` returns `c.Wait()`'s err — `nil` for clean close, EOF for normal end-of-stream, other error for abnormal close.
+- **No setter, no race:** `context.Cause` reads the same atomic value the cancel function writes. The classifier runs at proxy.Run exit time, by which point the cause is already set by whichever cancel-path fired.
+
+**New shared sentinel** in `share/tunnel/tunnel.go`:
+
+```go
+// AA-fork: cancel cause used by chisel-server's Close() so OnRemoteUnbound
+// callbacks can distinguish server-initiated shutdown from client-initiated
+// disconnect via context.Cause(ctx).
+var ErrServerShutdown = errors.New("chisel: server shutdown")
+```
 
 **Helpers added to `share/settings/remote.go`**:
 
@@ -236,12 +250,44 @@ type Config struct {
 ```go
 type Server struct {
     // ...existing fields
-    coordClient  *coordinator.Client // nil iff config.Coordinator == nil
-    shuttingDown atomic.Bool         // set by Close() so disconnect reason can distinguish server-initiated closes
+    coordClient    *coordinator.Client      // nil iff config.Coordinator == nil
+    shutdownCtx    context.Context          // cancelled with cause ErrServerShutdown by Close()
+    shutdownCancel context.CancelCauseFunc  // tied to shutdownCtx
 }
 ```
 
-`Close()` sets `shuttingDown.Store(true)` before delegating to `httpServer.Close()`. The disconnect-reason classifier in `handleWebsocket` reads this flag to decide between `DisconnectServerShutdown` and `DisconnectConnectionLost` for closes induced by context cancellation.
+In `NewServer`:
+```go
+ctx, cancel := context.WithCancelCause(context.Background())
+server.shutdownCtx = ctx
+server.shutdownCancel = cancel
+```
+
+In `Server.Close()`:
+```go
+s.shutdownCancel(tunnel.ErrServerShutdown)
+return s.httpServer.Close()
+```
+
+In `handleWebsocket`, the per-request context is derived as a child of `s.shutdownCtx` so server shutdown propagates as a cause:
+```go
+reqCtx, reqCancel := context.WithCancelCause(req.Context())
+go func() {
+    select {
+    case <-s.shutdownCtx.Done():
+        reqCancel(context.Cause(s.shutdownCtx))
+    case <-reqCtx.Done():
+    }
+}()
+defer reqCancel(nil)
+
+eg, egCtx := errgroup.WithContext(reqCtx)
+// ... BindSSH and BindRemotes use egCtx ...
+```
+
+The errgroup's `egCtx` inherits cancellation cause from `reqCtx`. When `BindSSH` returns its `c.Wait()` error, errgroup cancels with that error as cause; the proxy.Run goroutine's ctx (a child of egCtx) sees the same cause via `context.Cause`. Server shutdown overrides via the shutdown→reqCtx propagation goroutine.
+
+No `atomic.Bool`, no setter method, no timing race.
 
 **`NewServer`** validates URL at parse time + builds the client:
 
@@ -272,7 +318,7 @@ var (
 if s.coordClient != nil {
     sess, err := s.coordClient.Lookup(req.Context(), hostname)
     if err != nil {
-        s.replyChiselFailure(w, req, l, err) // maps coord-err → WS upgrade status (401/403/503)
+        rejectChisel(configReq, l, err) // SSH-level reject + log at appropriate level
         return
     }
     sessionID = sess.SessionID
@@ -298,33 +344,28 @@ if s.coordClient != nil {
     }
 }
 
-// ... existing tunnel.New + BindSSH + BindRemotes ...
-
-// AA-fork: derive disconnect reason from eg.Wait() error.
-reason := tunnel.DisconnectClient
-if err != nil {
-    if errors.Is(err, context.Canceled) || s.shuttingDown.Load() {
-        reason = tunnel.DisconnectServerShutdown
-    } else if !strings.HasSuffix(err.Error(), "EOF") {
-        reason = tunnel.DisconnectConnectionLost
-    }
-}
-tunnel.SetDisconnectReason(reason)
+// ... existing tunnel.New + BindSSH + BindRemotes inside errgroup ...
+// (no SetDisconnectReason call needed — proxy.Run's exit reads
+// context.Cause(ctx) to classify the reason locally)
 ```
 
-**Helper: `replyChiselFailure(w, req, l, err)`** — small unexported function in `server_handler.go` that:
+**Helper: `rejectChisel(req *ssh.Request, l *cio.Logger, err error)`** — small unexported function in `server_handler.go` that:
 1. Inspects `err` against the coordinator sentinel errors (`coordinator.ErrAuth`, `ErrTransient`, `ErrConflict`, `ErrNotFound`)
-2. Maps to an HTTP status code returned on the WebSocket-upgrade response
+2. Sends an SSH-level rejection via `req.Reply(false, []byte(message))` — the chisel client surfaces the message in its journal so an operator triaging "why isn't this LCM connecting" sees the cause directly
 3. Logs at the appropriate level (INFO/WARN/ERROR per the table below)
 
-Maps coordinator errors → HTTP status codes returned to the LCM:
+The SSH connection closes naturally when handleWebsocket returns after this helper. There is no HTTP status to set — the WebSocket upgrade already happened in `handleClientHandler` (status 101) before chisel-server enters the SSH handshake. The "reject" mechanism is the chisel handshake's `r.Reply(false, ...)` path, identical to how upstream chisel rejects on "config invalid" or "ACL access denied."
 
-| Coord error | Status to LCM | Log level |
+Maps coordinator errors → SSH reject message strings + log levels:
+
+| Coord error | SSH reject message | Log level |
 |---|---|---|
-| `ErrNotFound` (lookup) | 403 | INFO (operator hasn't clicked yet) |
-| `ErrAuth` (any call) | 503 | ERROR (chisel-server cert bug — page ops) |
-| `ErrTransient` (any call) | 503 | WARN (transient; LCM retries) |
-| `ErrConflict` (activate) | 503 | WARN (state divergence; teardown + retry converges) |
+| `ErrNotFound` (lookup) | `no pending session for hostname <X>` | INFO (operator hasn't clicked yet) |
+| `ErrAuth` (any call) | `coordinator unreachable` | ERROR (chisel-server cert bug — page ops) |
+| `ErrTransient` (any call) | `coordinator unreachable, retry in flight` | WARN (LCM retries) |
+| `ErrConflict` (activate) | `state divergence on activate, see coordinator logs` | WARN (teardown + retry converges) |
+
+The coordinator's actual cause stays in chisel-server's logs (with sessionID, hostname, raw err) — the LCM-facing message stays generic so a misbehaving chisel-server cert can't leak Layer-2 detail to LCM clients.
 
 ### `main.go` — new flags
 
@@ -418,7 +459,7 @@ Tearing down + 503 + LCM retry → next lookup sees the fresh state → converge
 
 `bastion/docker-compose.yml` will set `stop_grace_period: 30s` for the bastion-chisel service (deploy-side change, not chisel-fork code). Integration test asserts N=10 active sessions all deactivate within 8s wall-clock.
 
-The `s.shuttingDown atomic.Bool` flag is set by `Server.Close()` and consulted by the disconnect-reason classifier so SIGTERM-induced closes get reason `DisconnectServerShutdown` rather than `DisconnectConnectionLost`.
+The cancel-cause-context machinery in the Server struct (`shutdownCtx` cancelled with `tunnel.ErrServerShutdown` via `Close()`) propagates through to the proxy.Run goroutine's context. The `OnRemoteUnbound` callback's classifier reads `context.Cause(ctx)` and maps `ErrServerShutdown` to `DisconnectServerShutdown`, distinguishing it from regular client-side disconnects.
 
 ## Testing
 
@@ -480,7 +521,7 @@ Tracked as a separate task; the chisel-fork PR will not merge until the coordina
 
 1. **Phase 1: `share/tunnel/` hooks** — add `DisconnectReason` type, callbacks on `Config`, wiring in `BindRemotes` + `Proxy.Run`. Self-contained; no coordinator dependency. Ship-ready as an upstream PR independent of the coordinator code.
 2. **Phase 2: `server/coordinator/` package** — Client, types, paths, errors. Unit tests with `httptest.NewServer`. Self-contained library code.
-3. **Phase 3: `server/` integration** — `Config.Coordinator`, `NewServer` wiring, `handleWebsocket` lookup→bind→activate flow, `replyChiselFailure` mapping. Depends on Phases 1+2.
+3. **Phase 3: `server/` integration** — `Config.Coordinator`, `NewServer` wiring (including `shutdownCtx`/`shutdownCancel`), `handleWebsocket` lookup→bind→activate flow, `rejectChisel` SSH-level reject mapping. Depends on Phases 1+2.
 4. **Phase 4: `main.go` flags** — CLI plumbing. Trivial.
 5. **Phase 5: integration tests** — `test/e2e/coordinator_test.go` covering the eight scenarios above.
 6. **Phase 6: docs** — README note about the fork (one-sentence module-path explanation), commit-message hygiene marking AA-fork additions, contract doc cross-reference.
