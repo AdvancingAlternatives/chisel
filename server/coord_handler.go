@@ -5,9 +5,11 @@
 package chserver
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 
+	"github.com/jpillora/chisel/server/coordinator"
 	"github.com/jpillora/chisel/share/settings"
 )
 
@@ -27,4 +29,27 @@ func overrideReverseRemotePort(remotes []*settings.Remote, port int) error {
 		}
 	}
 	return fmt.Errorf("no reverse remote in client config (got %d remotes)", len(remotes))
+}
+
+// rejectMessage maps a coordinator client error to the operator-facing
+// message string surfaced via SSH-level rejection (r.Reply(false, ...)).
+//
+// Auth and transient failures intentionally return the same generic
+// "coordinator unreachable" framing so a chisel-server cert bug
+// (Layer-2) doesn't leak detail to the LCM client. The actual cause
+// stays in chisel-server's own logs (logged separately by the caller
+// at the appropriate level — INFO/WARN/ERROR per the design doc).
+func rejectMessage(err error) string {
+	switch {
+	case errors.Is(err, coordinator.ErrNotFound):
+		return "no pending session for hostname"
+	case errors.Is(err, coordinator.ErrAuth):
+		return "coordinator unreachable"
+	case errors.Is(err, coordinator.ErrTransient):
+		return "coordinator unreachable, retry in flight"
+	case errors.Is(err, coordinator.ErrConflict):
+		return "state divergence on activate, see coordinator logs"
+	default:
+		return "coordinator error"
+	}
 }
