@@ -42,6 +42,17 @@ func (p *Proxy) boundListener() net.Listener {
 	return nil
 }
 
+// tunnelConfig exposes the parent Tunnel's Config so Proxy.Run can read
+// OnRemoteUnbound at exit time.
+func (p *Proxy) tunnelConfig() Config {
+	if t, ok := p.sshTun.(*Tunnel); ok {
+		return t.Config
+	}
+	// Test stubs may pass a fakeSSHTunnel; return zero Config so the
+	// nil-check on OnRemoteUnbound at the call site safely skips.
+	return Config{}
+}
+
 // Close tears down the proxy's listener. Used by BindRemotes when
 // OnRemoteBound returns an error and the proxy needs to be torn down before
 // the accept loop starts.
@@ -98,6 +109,18 @@ func (p *Proxy) listen() error {
 //Run enables the proxy and blocks while its active,
 //close the proxy by cancelling the context.
 func (p *Proxy) Run(ctx context.Context) error {
+	// AA-fork: defer the OnRemoteUnbound callback so it fires regardless
+	// of how Run exits (clean accept-loop end, listener err, ctx cancel).
+	// Reason is classified from ctx.Cause at the moment Run returns —
+	// no setter race possible because the cause is set by whichever
+	// cancel-path fired (errgroup wraps BindSSH's err; Server.Close
+	// cancels with ErrServerShutdown).
+	if p.tunnelConfig().OnRemoteUnbound != nil {
+		defer func() {
+			p.tunnelConfig().OnRemoteUnbound(p.remote, classifyDisconnect(ctx))
+		}()
+	}
+
 	if p.remote.Stdio {
 		return p.runStdio(ctx)
 	} else if p.remote.LocalProto == "tcp" {

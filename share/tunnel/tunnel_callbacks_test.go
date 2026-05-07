@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -110,4 +111,104 @@ func contains(haystack, needle string) bool {
 		}
 	}
 	return false
+}
+
+func TestProxyRunCallsOnRemoteUnboundOnExit(t *testing.T) {
+	logger := cio.NewLogger("test")
+	logger.Info = false
+	logger.Debug = false
+
+	var (
+		unboundFired  bool
+		unboundReason DisconnectReason
+		mu            sync.Mutex
+	)
+
+	cfg := Config{
+		Logger:  logger,
+		Inbound: true,
+		OnRemoteBound: func(ctx context.Context, r *settings.Remote, ln net.Listener) error {
+			return nil
+		},
+		OnRemoteUnbound: func(r *settings.Remote, reason DisconnectReason) {
+			mu.Lock()
+			defer mu.Unlock()
+			unboundFired = true
+			unboundReason = reason
+		},
+	}
+	tun := New(cfg)
+
+	remote := &settings.Remote{
+		Reverse:   true,
+		LocalHost: "127.0.0.1", LocalPort: "0", LocalProto: "tcp",
+		RemoteHost: "127.0.0.1", RemotePort: "0", RemoteProto: "tcp",
+	}
+
+	ctx, cancel := context.WithCancelCause(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- tun.BindRemotes(ctx, []*settings.Remote{remote}) }()
+
+	// Wait until proxy is up.
+	time.Sleep(100 * time.Millisecond)
+
+	// Simulate clean client disconnect (no cause).
+	cancel(nil)
+	<-done
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !unboundFired {
+		t.Fatal("OnRemoteUnbound was not called")
+	}
+	if unboundReason != DisconnectClient {
+		t.Errorf("reason = %q, want DisconnectClient", unboundReason)
+	}
+}
+
+func TestProxyRunReportsServerShutdownReason(t *testing.T) {
+	logger := cio.NewLogger("test")
+	logger.Info = false
+	logger.Debug = false
+
+	var (
+		mu            sync.Mutex
+		unboundReason DisconnectReason
+		fired         bool
+	)
+
+	cfg := Config{
+		Logger:  logger,
+		Inbound: true,
+		OnRemoteUnbound: func(r *settings.Remote, reason DisconnectReason) {
+			mu.Lock()
+			defer mu.Unlock()
+			unboundReason = reason
+			fired = true
+		},
+	}
+	tun := New(cfg)
+
+	remote := &settings.Remote{
+		Reverse:   true,
+		LocalHost: "127.0.0.1", LocalPort: "0", LocalProto: "tcp",
+		RemoteHost: "127.0.0.1", RemotePort: "0", RemoteProto: "tcp",
+	}
+
+	ctx, cancel := context.WithCancelCause(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- tun.BindRemotes(ctx, []*settings.Remote{remote}) }()
+	time.Sleep(100 * time.Millisecond)
+
+	cancel(ErrServerShutdown)
+	<-done
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !fired {
+		t.Fatal("OnRemoteUnbound did not fire")
+	}
+	if unboundReason != DisconnectServerShutdown {
+		t.Errorf("reason = %q, want DisconnectServerShutdown", unboundReason)
+	}
 }
