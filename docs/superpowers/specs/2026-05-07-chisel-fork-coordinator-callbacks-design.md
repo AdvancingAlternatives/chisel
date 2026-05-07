@@ -517,6 +517,21 @@ Without this, a transient LCM tunnel drop + reconnect within the session window 
 
 Tracked as a separate task; the chisel-fork PR will not merge until the coordinator fix lands.
 
+## Pre-flight check
+
+`go.mod` must pin `golang.org/x/sync` at **v0.6 or later**. The
+cancel-cause behavior in `errgroup.WithContext` was added at v0.6; older
+pins silently degrade — `BindSSH`'s return error never surfaces as an
+errgroup cancel cause, the classifier always sees a nil cause, and every
+disconnect classifies as `DisconnectClient` regardless of actual reason.
+
+Verified at design time on `feat/coordinator-callbacks`: `go.mod` pins
+`golang.org/x/sync v0.19.0`. The plan should re-verify (`grep
+golang.org/x/sync go.mod` showing >= v0.6) as the first step in Phase 1
+before any code lands. If a future upstream-merge or dep-bump downgrades
+the pin, the cancel-cause classifier silently breaks — worth a CI guard
+or a one-line check in the integration test setup.
+
 ## Implementation phasing
 
 1. **Phase 1: `share/tunnel/` hooks** — add `DisconnectReason` type, callbacks on `Config`, wiring in `BindRemotes` + `Proxy.Run`. Self-contained; no coordinator dependency. Ship-ready as an upstream PR independent of the coordinator code.
