@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"log"
+	"net"
 	"os"
 	"sync"
 	"time"
@@ -28,6 +29,26 @@ type Config struct {
 	//ACL optionally checks if a given address (host:port) is allowed.
 	//When set, outbound connections are denied if this returns false.
 	ACL func(addr string) bool
+
+	// AA-fork
+
+	// OnRemoteBound fires after a Proxy's net.Listener is bound and
+	// before its accept loop starts. Returning a non-nil error tears down
+	// THIS proxy only (not the whole tunnel) and propagates the error back
+	// to BindRemotes' caller. Use case: external session manager wants to
+	// validate the binding before exposing the port.
+	//
+	// listener.Addr() is the actually-bound address (relevant when the
+	// caller requested ":0" / RemotePort=0 and the OS picked a port).
+	OnRemoteBound func(ctx context.Context, remote *settings.Remote, listener net.Listener) error
+
+	// AA-fork
+
+	// OnRemoteUnbound fires when a Proxy's accept loop exits, regardless
+	// of cause. The reason is derived at the callback site from
+	// context.Cause(ctx) on the proxy's running context — see
+	// classifyDisconnect in this package.
+	OnRemoteUnbound func(remote *settings.Remote, reason DisconnectReason)
 }
 
 //Tunnel represents an SSH tunnel with proxy capabilities.
