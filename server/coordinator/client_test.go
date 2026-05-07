@@ -210,3 +210,56 @@ func TestActivate503ReturnsErrTransient(t *testing.T) {
 		t.Errorf("err = %v, want ErrTransient", err)
 	}
 }
+
+func TestDeactivate200Success(t *testing.T) {
+	var got DeactivateRequest
+	_, c := fakeCoordinatorServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/sessions/ses_abc/deactivate" {
+			t.Errorf("path = %q", r.URL.Path)
+		}
+		json.NewDecoder(r.Body).Decode(&got)
+		w.WriteHeader(http.StatusOK)
+	})
+
+	err := c.Deactivate(context.Background(), "ses_abc", "lcm-a57d", 22099, "client_disconnect")
+	if err != nil {
+		t.Fatalf("Deactivate: %v", err)
+	}
+	if got.Reason != "client_disconnect" {
+		t.Errorf("reason = %q", got.Reason)
+	}
+	if got.TargetHostname != "lcm-a57d" || got.ActualPortBound != 22099 {
+		t.Errorf("deactivate body = %+v", got)
+	}
+}
+
+func TestDeactivate204Success(t *testing.T) {
+	// Coordinator may also use 204 No Content.
+	_, c := fakeCoordinatorServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	err := c.Deactivate(context.Background(), "ses_abc", "lcm-a57d", 22099, "client_disconnect")
+	if err != nil {
+		t.Errorf("Deactivate(204): %v", err)
+	}
+}
+
+func TestDeactivate409ReturnsErrConflict(t *testing.T) {
+	_, c := fakeCoordinatorServer(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "already closed", http.StatusConflict)
+	})
+	err := c.Deactivate(context.Background(), "ses_abc", "lcm-x", 22099, "client_disconnect")
+	if !errors.Is(err, ErrConflict) {
+		t.Errorf("err = %v, want ErrConflict", err)
+	}
+}
+
+func TestDeactivate404ReturnsErrNotFound(t *testing.T) {
+	_, c := fakeCoordinatorServer(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "session gone", http.StatusNotFound)
+	})
+	err := c.Deactivate(context.Background(), "ses_abc", "lcm-x", 22099, "client_disconnect")
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("err = %v, want ErrNotFound", err)
+	}
+}

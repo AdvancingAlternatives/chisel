@@ -145,3 +145,55 @@ func (c *Client) Activate(ctx context.Context, sessionID, hostname string, port 
 		return fmt.Errorf("Activate: unexpected status %d: %s", resp.StatusCode, string(respBody))
 	}
 }
+
+// Deactivate posts the close reason for a session. Best-effort from the
+// caller's perspective: errors are logged but generally don't propagate
+// (the coordinator's TTL fallback handles cleanup if this fails).
+//
+// Returns nil on 200 or 204.
+// Returns err wrapping ErrNotFound on 404 (session gone — coordinator already cleaned up).
+// Returns err wrapping ErrConflict on 409 (already closed — stale retry).
+// Returns err wrapping ErrAuth on 401/403, ErrTransient on 5xx / transport.
+func (c *Client) Deactivate(ctx context.Context, sessionID, hostname string, port int, reason string) error {
+	body, err := json.Marshal(DeactivateRequest{
+		TargetHostname:  hostname,
+		ActualPortBound: port,
+		Reason:          reason,
+	})
+	if err != nil {
+		return fmt.Errorf("Deactivate: marshal: %w", err)
+	}
+
+	reqURL := c.baseURL + fmt.Sprintf(PathDeactivate, url.PathEscape(sessionID))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("Deactivate: build request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("Deactivate: %w: %v", ErrTransient, err)
+	}
+	defer resp.Body.Close()
+
+	switch {
+	case resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNoContent:
+		io.Copy(io.Discard, resp.Body)
+		return nil
+	case resp.StatusCode == http.StatusNotFound:
+		return fmt.Errorf("Deactivate: %w", ErrNotFound)
+	case resp.StatusCode == http.StatusConflict:
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("Deactivate: %w: %s", ErrConflict, string(respBody))
+	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("Deactivate: %w: %s", ErrAuth, string(respBody))
+	case resp.StatusCode >= 500:
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("Deactivate: %w: %d %s", ErrTransient, resp.StatusCode, string(respBody))
+	default:
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("Deactivate: unexpected status %d: %s", resp.StatusCode, string(respBody))
+	}
+}
