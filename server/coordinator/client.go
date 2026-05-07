@@ -197,3 +197,14 @@ func (c *Client) Deactivate(ctx context.Context, sessionID, hostname string, por
 		return fmt.Errorf("Deactivate: unexpected status %d: %s", resp.StatusCode, string(respBody))
 	}
 }
+
+// NewClientForTesting builds a Client with a plain http.Client (no mTLS).
+// Used by integration tests that point at httptest.Server, which doesn't
+// serve TLS. NEVER use this in production code paths.
+func NewClientForTesting(baseURL string) *Client {
+	return &Client{
+		baseURL: strings.TrimRight(baseURL, "/"),
+		http:    &http.Client{Timeout: 5 * time.Second},
+		timeout: 5 * time.Second,
+	}
+}

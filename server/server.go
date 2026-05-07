@@ -297,3 +297,21 @@ func (s *Server) DeleteUser(user string) {
 func (s *Server) ResetUsers(users []*settings.User) {
 	s.users.Reset(users)
 }
+
+// NewServerNoCoordValidation is identical to NewServer except it skips
+// the coordinator URL/mTLS validation step. ONLY for integration tests
+// that inject a test coordClient via SetCoordClient.
+func NewServerNoCoordValidation(c *Config) (*Server, error) {
+	saved := c.Coordinator
+	c.Coordinator = nil
+	srv, err := NewServer(c)
+	c.Coordinator = saved
+	return srv, err
+}
+
+// SetCoordClient injects a coordinator.Client for testing. The injected
+// client is used by handleWebsocket as if config.Coordinator had been
+// set.
+func SetCoordClient(s *Server, c *coordinator.Client) {
+	s.coordClient = c
+}

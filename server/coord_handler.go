@@ -18,17 +18,23 @@ import (
 )
 
 // overrideReverseRemotePort finds the first reverse remote in remotes and
-// sets its RemotePort to port. The β.1 model has exactly one reverse
-// per session (R:0:localhost:22 from the LCM); if zero remotes match,
-// returns an error so the caller can SSH-reject the connection.
+// rewrites the listen-side port (LocalPort) to the coordinator-allocated
+// value. The β.1 model has exactly one reverse per session
+// (R:0:localhost:22 from the LCM); if zero remotes match, returns an error
+// so the caller can SSH-reject the connection.
+//
+// In chisel's R:LISTEN_PORT:DEST_HOST:DEST_PORT encoding, the listen-side
+// port maps to Remote.LocalPort (and proxy.listen() binds LocalHost:LocalPort
+// for reverse remotes). RemotePort is the destination port on the LCM side
+// and must be left intact so SSH traffic still reaches port 22 there.
 //
 // Mutates remotes in place because chisel's downstream code re-reads
-// each Remote.RemotePort via .UserAddr() / .CanListen(), and the
+// each Remote via .UserAddr() / .CanListen() / .Local() / .Remote(), and the
 // override needs to be visible there.
 func overrideReverseRemotePort(remotes []*settings.Remote, port int) error {
 	for _, r := range remotes {
 		if r.Reverse {
-			r.RemotePort = strconv.Itoa(port)
+			r.LocalPort = strconv.Itoa(port)
 			return nil
 		}
 	}

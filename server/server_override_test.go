@@ -17,7 +17,7 @@ func TestOverrideReverseRemotePort(t *testing.T) {
 		{
 			name: "single reverse",
 			remotes: []*settings.Remote{
-				{Reverse: true, RemotePort: "0"},
+				{Reverse: true, LocalPort: "0"},
 			},
 			port:     22099,
 			wantErr:  false,
@@ -26,7 +26,7 @@ func TestOverrideReverseRemotePort(t *testing.T) {
 		{
 			name: "no reverse remote",
 			remotes: []*settings.Remote{
-				{Reverse: false, RemotePort: "0"},
+				{Reverse: false, LocalPort: "0"},
 			},
 			port:    22099,
 			wantErr: true,
@@ -40,8 +40,8 @@ func TestOverrideReverseRemotePort(t *testing.T) {
 		{
 			name: "multiple reverses (β.1 is 1-remote per session, this is undefined behavior; pick the first)",
 			remotes: []*settings.Remote{
-				{Reverse: true, RemotePort: "0"},
-				{Reverse: true, RemotePort: "0"},
+				{Reverse: true, LocalPort: "0"},
+				{Reverse: true, LocalPort: "0"},
 			},
 			port:     22099,
 			wantErr:  false,
@@ -55,8 +55,8 @@ func TestOverrideReverseRemotePort(t *testing.T) {
 				t.Fatalf("err = %v, wantErr = %v", err, tc.wantErr)
 			}
 			if !tc.wantErr {
-				if tc.remotes[0].RemotePort != tc.wantPort {
-					t.Errorf("RemotePort = %q, want %q", tc.remotes[0].RemotePort, tc.wantPort)
+				if tc.remotes[0].LocalPort != tc.wantPort {
+					t.Errorf("LocalPort = %q, want %q", tc.remotes[0].LocalPort, tc.wantPort)
 				}
 			}
 		})
