@@ -126,10 +126,9 @@ func chiselServerWithFakeCoordinator(t *testing.T, fc *fakeCoordinator, auth str
 	// Build a placeholder Config — URL is a dummy; we replace coordClient
 	// after NewServer rejects the http URL with a special test path.
 	srv, err := chserver.NewServerNoCoordValidation(&chserver.Config{
-		KeySeed:     "test-coord",
-		Reverse:     true,
-		Auth:        auth,
-		Coordinator: &coordinator.Config{}, // non-nil so TimeoutOrDefault works; URL+mTLS skipped via NewServerNoCoordValidation
+		KeySeed: "test-coord",
+		Reverse: true,
+		Auth:    auth,
 	})
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)

@@ -57,7 +57,6 @@ func TestCoordinatorDeactivateBestEffort(t *testing.T) {
 		KeySeed:     "test-be",
 		Reverse:     true,
 		Auth:        "lcm-fleet:secret",
-		Coordinator: &coordinator.Config{},
 	})
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)

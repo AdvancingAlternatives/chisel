@@ -65,7 +65,6 @@ func TestCoordinatorSIGTERMParallelDrain(t *testing.T) {
 		KeySeed:     "test-sigterm",
 		Reverse:     true,
 		Auth:        "lcm-fleet:secret",
-		Coordinator: &coordinator.Config{},
 	})
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)

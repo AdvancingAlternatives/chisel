@@ -301,10 +301,19 @@ func (s *Server) ResetUsers(users []*settings.User) {
 // NewServerNoCoordValidation is identical to NewServer except it skips
 // the coordinator URL/mTLS validation step. ONLY for integration tests
 // that inject a test coordClient via SetCoordClient.
+//
+// Ensures s.config.Coordinator is non-nil after construction even when
+// the caller doesn't supply one — handleWebsocket reads
+// s.config.Coordinator.TimeoutOrDefault() whenever coordClient is set,
+// and would NPE otherwise. Tests can therefore omit Coordinator from
+// their chserver.Config literals.
 func NewServerNoCoordValidation(c *Config) (*Server, error) {
 	saved := c.Coordinator
 	c.Coordinator = nil
 	srv, err := NewServer(c)
+	if saved == nil {
+		saved = &coordinator.Config{}
+	}
 	c.Coordinator = saved
 	return srv, err
 }

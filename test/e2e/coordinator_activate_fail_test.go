@@ -47,7 +47,6 @@ func TestCoordinatorActivateFailureTeardownProxy(t *testing.T) {
 		KeySeed:     "test-actfail",
 		Reverse:     true,
 		Auth:        "lcm-fleet:secret",
-		Coordinator: &coordinator.Config{},
 	})
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
