@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log"
+	"net"
 	"os"
 	"sync"
 	"time"
@@ -28,6 +30,26 @@ type Config struct {
 	//ACL optionally checks if a given address (host:port) is allowed.
 	//When set, outbound connections are denied if this returns false.
 	ACL func(addr string) bool
+
+	// AA-fork
+
+	// OnRemoteBound fires after a Proxy's net.Listener is bound and
+	// before its accept loop starts. Returning a non-nil error tears down
+	// THIS proxy only (not the whole tunnel) and propagates the error back
+	// to BindRemotes' caller. Use case: external session manager wants to
+	// validate the binding before exposing the port.
+	//
+	// listener.Addr() is the actually-bound address (relevant when the
+	// caller requested ":0" / RemotePort=0 and the OS picked a port).
+	OnRemoteBound func(ctx context.Context, remote *settings.Remote, listener net.Listener) error
+
+	// AA-fork
+
+	// OnRemoteUnbound fires when a Proxy's accept loop exits, regardless
+	// of cause. The reason is derived at the callback site from
+	// context.Cause(ctx) on the proxy's running context — see
+	// classifyDisconnect in this package.
+	OnRemoteUnbound func(remote *settings.Remote, reason DisconnectReason)
 }
 
 //Tunnel represents an SSH tunnel with proxy capabilities.
@@ -152,16 +174,35 @@ func (t *Tunnel) BindRemotes(ctx context.Context, remotes []*settings.Remote) er
 	if !t.Inbound {
 		return errors.New("inbound connections blocked")
 	}
-	proxies := make([]*Proxy, len(remotes))
-	for i, remote := range remotes {
+	proxies := make([]*Proxy, 0, len(remotes))
+	for _, remote := range remotes {
 		p, err := NewProxy(t.Logger, t, t.proxyCount, remote)
 		if err != nil {
+			// Tear down already-bound proxies before returning.
+			for _, prev := range proxies {
+				prev.Close()
+			}
 			return err
 		}
-		proxies[i] = p
+
+		// AA-fork: OnRemoteBound runs after listener bind + before accept loop.
+		// Callback err tears down THIS proxy only (and any previously-bound
+		// proxies in this BindRemotes call); other tunnels are unaffected.
+		if t.Config.OnRemoteBound != nil {
+			ln := p.boundListener()
+			if cbErr := t.Config.OnRemoteBound(ctx, remote, ln); cbErr != nil {
+				p.Close()
+				for _, prev := range proxies {
+					prev.Close()
+				}
+				return fmt.Errorf("OnRemoteBound: %w", cbErr)
+			}
+		}
+
+		proxies = append(proxies, p)
 		t.proxyCount++
 	}
-	//TODO: handle tunnel close
+
 	eg, ctx := errgroup.WithContext(ctx)
 	for _, proxy := range proxies {
 		p := proxy

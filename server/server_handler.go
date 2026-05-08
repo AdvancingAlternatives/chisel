@@ -1,12 +1,15 @@
 package chserver
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"sync/atomic"
 	"time"
 
 	chshare "github.com/jpillora/chisel/share"
+	"github.com/jpillora/chisel/server/coordinator"
 	"github.com/jpillora/chisel/share/cnet"
 	"github.com/jpillora/chisel/share/settings"
 	"github.com/jpillora/chisel/share/tunnel"
@@ -64,6 +67,13 @@ func (s *Server) handleWebsocket(w http.ResponseWriter, req *http.Request) {
 		s.Debugf("Failed to handshake (%s)", err)
 		return
 	}
+	// AA-fork: ensure sshConn is closed on every return path. Upstream
+	// chisel relies on the request-context teardown to GC the connection,
+	// which works for paths that block in BindSSH/BindRemotes. The
+	// coordinator-error early-return paths (after r.Reply(true, nil) but
+	// before BindSSH) need explicit cleanup so the SSH+websocket conn
+	// doesn't linger until HTTP request closure.
+	defer sshConn.Close()
 	// pull the users from the session map
 	var user *settings.User
 	if s.users.Len() > 0 {
@@ -133,7 +143,68 @@ func (s *Server) handleWebsocket(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 	//successfuly validated config!
-	r.Reply(true, nil)
+	// AA-fork: defer the success reply until after coordinator-lookup
+	// gating. If r.Reply(true) fires too early, subsequent
+	// r.Reply(false, ...) calls from the coordinator-lookup error path
+	// are silently discarded by golang.org/x/crypto/ssh — the SSH
+	// config-request channel only accepts one reply. That would mean
+	// the LCM-side chisel client never sees the operator-facing reject
+	// string ("no pending session for hostname X" / "coordinator
+	// unreachable, retry in flight" / etc.) in its journal. Legacy
+	// path (no coordinator) replies immediately so behavior matches
+	// upstream.
+	if s.coordClient == nil {
+		r.Reply(true, nil)
+	}
+
+	// AA-fork: coordinator integration — runs only when configured.
+	// Derive a request-scoped ctx that's cancelled either by the request
+	// closing OR the server shutting down. Server shutdown propagates
+	// cancel-cause tunnel.ErrServerShutdown so OnRemoteUnbound's
+	// classifyDisconnect can pick it up locally.
+	reqCtx, reqCancel := context.WithCancelCause(req.Context())
+	go func() {
+		select {
+		case <-s.shutdownCtx.Done():
+			reqCancel(context.Cause(s.shutdownCtx))
+		case <-reqCtx.Done():
+		}
+	}()
+	defer reqCancel(nil)
+
+	var (
+		sessionID  string
+		hostname   = req.Host
+		remoteAddr = req.RemoteAddr
+	)
+
+	if s.coordClient != nil {
+		// 1. Lookup pending session for this hostname.
+		sess, err := s.coordClient.Lookup(reqCtx, hostname)
+		if err != nil {
+			level := "info"
+			if errors.Is(err, coordinator.ErrAuth) {
+				level = "error"
+			} else if errors.Is(err, coordinator.ErrTransient) {
+				level = "warn"
+			}
+			s.coordLog(level, "lookup failed hostname=%s err=%v", hostname, err)
+			failed(s.Errorf("%s", rejectMessage(err)))
+			return
+		}
+		sessionID = sess.SessionID
+
+		// 2. Override the reverse remote's port to the allocated value.
+		if err := overrideReverseRemotePort(c.Remotes, sess.Port); err != nil {
+			l.Errorf("override reverse port: %v", err)
+			failed(s.Errorf("server config error"))
+			return
+		}
+
+		// Coordinator gating passed — now confirm the SSH config request.
+		r.Reply(true, nil)
+	}
+
 	//tunnel per ssh connection
 	tunnelConfig := tunnel.Config{
 		Logger:    l,
@@ -146,9 +217,23 @@ func (s *Server) handleWebsocket(w http.ResponseWriter, req *http.Request) {
 	if user != nil {
 		tunnelConfig.ACL = user.HasAccess
 	}
+	// AA-fork: install coordinator callbacks when configured. The closures
+	// capture sessionID + hostname + remoteAddr + the client + a logger so
+	// the call sites (inside tunnel package) don't need to know about the
+	// chisel-server type.
+	if s.coordClient != nil {
+		tunnelConfig.OnRemoteBound = coordinatorBindHook(s.coordClient, sessionID, hostname, remoteAddr)
+		tunnelConfig.OnRemoteUnbound = coordinatorUnbindHook(
+			s.coordClient,
+			func(format string, args ...interface{}) { l.Infof(format, args...) },
+			s.config.Coordinator.TimeoutOrDefault(),
+			sessionID,
+			hostname,
+		)
+	}
 	tunnel := tunnel.New(tunnelConfig)
 	//bind
-	eg, ctx := errgroup.WithContext(req.Context())
+	eg, ctx := errgroup.WithContext(reqCtx)
 	eg.Go(func() error {
 		//connected, handover ssh connection for tunnel to use, and block
 		return tunnel.BindSSH(ctx, sshConn, reqs, chans)

@@ -273,3 +273,17 @@ func (rs Remotes) Encode() []string {
 	}
 	return s
 }
+
+// RemotePortInt returns RemotePort parsed as int, or 0 on parse failure
+// or empty value. Convenience for callers that need the bound port as a
+// number rather than the wire-format string.
+func (r *Remote) RemotePortInt() int {
+	if r.RemotePort == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(r.RemotePort)
+	if err != nil {
+		return 0
+	}
+	return n
+}
