@@ -143,7 +143,19 @@ func (s *Server) handleWebsocket(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 	//successfuly validated config!
-	r.Reply(true, nil)
+	// AA-fork: defer the success reply until after coordinator-lookup
+	// gating. If r.Reply(true) fires too early, subsequent
+	// r.Reply(false, ...) calls from the coordinator-lookup error path
+	// are silently discarded by golang.org/x/crypto/ssh — the SSH
+	// config-request channel only accepts one reply. That would mean
+	// the LCM-side chisel client never sees the operator-facing reject
+	// string ("no pending session for hostname X" / "coordinator
+	// unreachable, retry in flight" / etc.) in its journal. Legacy
+	// path (no coordinator) replies immediately so behavior matches
+	// upstream.
+	if s.coordClient == nil {
+		r.Reply(true, nil)
+	}
 
 	// AA-fork: coordinator integration — runs only when configured.
 	// Derive a request-scoped ctx that's cancelled either by the request
@@ -188,6 +200,9 @@ func (s *Server) handleWebsocket(w http.ResponseWriter, req *http.Request) {
 			failed(s.Errorf("server config error"))
 			return
 		}
+
+		// Coordinator gating passed — now confirm the SSH config request.
+		r.Reply(true, nil)
 	}
 
 	//tunnel per ssh connection
