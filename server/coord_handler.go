@@ -88,8 +88,20 @@ func coordinatorBindHook(client *coordinator.Client, sessionID, hostname, remote
 // The deactivate call uses a fresh background context with the coordinator's
 // timeout, NOT the proxy's ctx (which is already cancelled by the time
 // OnRemoteUnbound fires — its cause is what tells us the disconnect reason).
+//
+// Deactivate is gated on reason == DisconnectServerShutdown. Client and
+// ConnectionLost disconnects intentionally preserve the coordinator session
+// so that an LCM reconnect (e.g. after `systemctl restart lcm-bastion` or a
+// transient network blip) can land on the same session_id via Lookup +
+// idempotent-Activate. Only a chisel-server stack restart genuinely makes
+// the session unreconnectable, because listeners are gone.
 func coordinatorUnbindHook(client *coordinator.Client, log func(format string, args ...interface{}), timeout time.Duration, sessionID, hostname string) func(*settings.Remote, tunnel.DisconnectReason) {
 	return func(r *settings.Remote, reason tunnel.DisconnectReason) {
+		if reason != tunnel.DisconnectServerShutdown {
+			log("unbind reason=%s sessionID=%s hostname=%s: preserving coordinator session for reconnect",
+				reason, sessionID, hostname)
+			return
+		}
 		port := r.RemotePortInt()
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()

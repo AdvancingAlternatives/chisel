@@ -82,7 +82,12 @@ func TestCoordinatorReconnectIdempotent(t *testing.T) {
 	c1.Close()
 
 	// Second connection (simulate LCM reconnect).
-	time.Sleep(200 * time.Millisecond) // let chisel-server's deactivate run
+	// Under disconnect-reason gating the chisel-server does NOT fire a
+	// Deactivate on client-disconnect — the session stays active so the
+	// reconnect Lookup can land on it. We still pause briefly to let the
+	// chisel-server tear down its proxy goroutine before the new client
+	// reuses the placeholder listener port.
+	time.Sleep(200 * time.Millisecond)
 	c2, _ := chclient.NewClient(&chclient.Config{
 		Server:        "http://127.0.0.1:" + listenPort,
 		Auth:          "lcm-fleet:secret",
