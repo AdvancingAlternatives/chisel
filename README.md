@@ -439,3 +439,6 @@ Since WebSockets support is required:
 ## License
 
 [MIT](https://github.com/jpillora/chisel/blob/master/LICENSE) © Jaime Pillora
+
+
+<!-- ci-trigger-probe 2026-05-11 -->
