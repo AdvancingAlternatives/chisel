@@ -87,9 +87,11 @@ func TestCoordinatorDeactivateBestEffort(t *testing.T) {
 		t.Fatal("activate never fired")
 	}
 
-	// Trigger disconnect.
-	cancel()
-	c.Close()
+	// Trigger server shutdown — this is the path that drives Deactivate
+	// under the new disconnect-reason gating. (Client disconnect would
+	// preserve the session for reconnect and never call Deactivate; see
+	// coordinator_client_disconnect_test.go.)
+	srv.Close()
 
 	// Deactivate must fire (gets 500) but NOT crash the handler.
 	if !waitFor(2*time.Second, func() bool {

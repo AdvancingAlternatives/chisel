@@ -97,9 +97,10 @@ func TestCoordinatorHappyPath(t *testing.T) {
 		t.Errorf("chisel did not bind allocated port 23001")
 	}
 
-	// Trigger disconnect.
-	cancel()
-	c.Close()
+	// Trigger server shutdown — this is the path that drives Deactivate
+	// under the new disconnect-reason gating (client disconnects preserve
+	// the session for reconnect; see coordinator_client_disconnect_test.go).
+	srv.Close()
 
 	// Wait for deactivate.
 	if !waitFor(3*time.Second, func() bool {
@@ -114,6 +115,9 @@ func TestCoordinatorHappyPath(t *testing.T) {
 	defer fc.mu.Unlock()
 	if d := fc.deactivateCalls[0]; d.SessionID != sessionID {
 		t.Errorf("deactivate.SessionID = %q, want %q", d.SessionID, sessionID)
+	}
+	if d := fc.deactivateCalls[0]; d.Reason != "server_shutdown" {
+		t.Errorf("deactivate.Reason = %q, want %q", d.Reason, "server_shutdown")
 	}
 }
 
