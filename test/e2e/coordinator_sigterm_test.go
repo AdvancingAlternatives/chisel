@@ -62,9 +62,9 @@ func TestCoordinatorSIGTERMParallelDrain(t *testing.T) {
 	t.Cleanup(overrideServer.Close)
 
 	srv, err := chserver.NewServerNoCoordValidation(&chserver.Config{
-		KeySeed:     "test-sigterm",
-		Reverse:     true,
-		Auth:        "lcm-fleet:secret",
+		KeySeed: "test-sigterm",
+		Reverse: true,
+		Auth:    "lcm-fleet:secret",
 	})
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
@@ -76,14 +76,16 @@ func TestCoordinatorSIGTERMParallelDrain(t *testing.T) {
 	clients := make([]*chclient.Client, 0, N)
 	for i := 0; i < N; i++ {
 		c, err := chclient.NewClient(&chclient.Config{
-			Server:        "http://127.0.0.1:" + listenPort,
-			Auth:          "lcm-fleet:secret",
+			Server:  "http://127.0.0.1:" + listenPort,
+			Auth:    "lcm-fleet:secret",
 			Headers: http.Header{"Host": []string{fmt.Sprintf("lcm-drain%d", i)}},
-			// Use a unique placeholder port per client because chisel's
-			// CanListen() check races on a shared port (does a real
-			// bind/close before the coordinator override). The placeholder
-			// is rewritten to allocatedPortBase+idx by overrideReverseRemotePort.
-			Remotes:       []string{fmt.Sprintf("R:%d:127.0.0.1:22", 50000+i)},
+			// Use a fresh OS-assigned free port per client (availablePort)
+			// because chisel's CanListen() check does a real bind/close
+			// before the coordinator override; a fixed port like 50000+i
+			// flaked on Windows CI when the runner already had it in use.
+			// The placeholder is rewritten to allocatedPortBase+idx by
+			// overrideReverseRemotePort.
+			Remotes:       []string{"R:" + availablePort() + ":127.0.0.1:22"},
 			MaxRetryCount: 0,
 		})
 		if err != nil {

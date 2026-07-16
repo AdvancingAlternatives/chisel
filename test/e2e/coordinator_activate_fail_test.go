@@ -44,9 +44,9 @@ func TestCoordinatorActivateFailureTeardownProxy(t *testing.T) {
 
 	// Build chisel-server with coordinator pointing at the override.
 	srv, err := chserver.NewServerNoCoordValidation(&chserver.Config{
-		KeySeed:     "test-actfail",
-		Reverse:     true,
-		Auth:        "lcm-fleet:secret",
+		KeySeed: "test-actfail",
+		Reverse: true,
+		Auth:    "lcm-fleet:secret",
 	})
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
@@ -59,7 +59,7 @@ func TestCoordinatorActivateFailureTeardownProxy(t *testing.T) {
 		Server:           "http://127.0.0.1:" + listenPort,
 		Auth:             "lcm-fleet:secret",
 		Headers:          http.Header{"Host": []string{"lcm-conf1"}},
-		Remotes:          []string{"R:50000:127.0.0.1:22"},
+		Remotes:          []string{"R:" + availablePort() + ":127.0.0.1:22"},
 		MaxRetryCount:    0,
 		MaxRetryInterval: 100 * time.Millisecond,
 	})
