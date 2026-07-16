@@ -37,14 +37,16 @@ func TestCoordinatorHappyPath(t *testing.T) {
 	// but chisel's settings.DecodeRemote rejects "0" as a port (isPort()
 	// requires n>=1) which makes pre-validation in handleWebsocket choke.
 	// The β.1 LCM in production sends a real placeholder; the coordinator
-	// override rewrites it before the listener binds. 50000 is just an
-	// unused port chosen so CanListen() succeeds; what matters for this
+	// override rewrites it before the listener binds. availablePort() hands
+	// us a currently-free port so CanListen() succeeds regardless of what
+	// else is bound on the host (a fixed port like 50000 flaked on Windows
+	// CI whenever the runner already had it in use); what matters for this
 	// test is that the override changes the listen port to allocatedPort.
 	c, err := chclient.NewClient(&chclient.Config{
 		Server:           "http://127.0.0.1:" + listenPort,
 		Auth:             "lcm-fleet:secret",
 		Headers:          http.Header{"Host": []string{hostname}},
-		Remotes:          []string{"R:50000:127.0.0.1:22"},
+		Remotes:          []string{"R:" + availablePort() + ":127.0.0.1:22"},
 		MaxRetryCount:    0,
 		MaxRetryInterval: 100 * time.Millisecond,
 	})

@@ -83,7 +83,7 @@ func TestCoordinatorRejectMessageReachesClient(t *testing.T) {
 		Server:           "http://127.0.0.1:" + listenPort,
 		Auth:             "lcm-fleet:secret",
 		Headers:          http.Header{"Host": []string{"lcm-unknown-reject"}},
-		Remotes:          []string{"R:50000:127.0.0.1:22"},
+		Remotes:          []string{"R:" + availablePort() + ":127.0.0.1:22"},
 		MaxRetryCount:    0,
 		MaxRetryInterval: 100 * time.Millisecond,
 	})

@@ -1,7 +1,13 @@
 name: CI
 on:
   pull_request: {}
-  push: {}
+  push:
+    # Skip the automated workspace-backup snapshot branches. These are
+    # machine safety-net pushes (see ClaudeWorkspaceAutoBackup), not code
+    # under development, so running the full 3-OS matrix on them every couple
+    # of hours is pure noise (and was emailing on the Windows flake).
+    branches-ignore:
+      - 'backup/**'
 permissions: write-all
 jobs:
   # ================

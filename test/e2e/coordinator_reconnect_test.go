@@ -47,9 +47,9 @@ func TestCoordinatorReconnectIdempotent(t *testing.T) {
 	t.Cleanup(overrideServer.Close)
 
 	srv, err := chserver.NewServerNoCoordValidation(&chserver.Config{
-		KeySeed:     "test-reconnect",
-		Reverse:     true,
-		Auth:        "lcm-fleet:secret",
+		KeySeed: "test-reconnect",
+		Reverse: true,
+		Auth:    "lcm-fleet:secret",
 	})
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
@@ -63,7 +63,7 @@ func TestCoordinatorReconnectIdempotent(t *testing.T) {
 		Server:        "http://127.0.0.1:" + listenPort,
 		Auth:          "lcm-fleet:secret",
 		Headers:       http.Header{"Host": []string{"lcm-re1"}},
-		Remotes:       []string{"R:50000:127.0.0.1:22"},
+		Remotes:       []string{"R:" + availablePort() + ":127.0.0.1:22"},
 		MaxRetryCount: 0,
 	})
 	ctx1, cancel1 := context.WithCancel(context.Background())
@@ -92,7 +92,7 @@ func TestCoordinatorReconnectIdempotent(t *testing.T) {
 		Server:        "http://127.0.0.1:" + listenPort,
 		Auth:          "lcm-fleet:secret",
 		Headers:       http.Header{"Host": []string{"lcm-re1"}},
-		Remotes:       []string{"R:50000:127.0.0.1:22"},
+		Remotes:       []string{"R:" + availablePort() + ":127.0.0.1:22"},
 		MaxRetryCount: 0,
 	})
 	ctx2, cancel2 := context.WithCancel(context.Background())
