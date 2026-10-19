@@ -2,15 +2,12 @@
 
 [![GoDoc](https://godoc.org/github.com/jpillora/chisel?status.svg)](https://godoc.org/github.com/jpillora/chisel) [![CI](https://github.com/jpillora/chisel/workflows/CI/badge.svg)](https://github.com/jpillora/chisel/actions?workflow=CI)
 
-> **AdvancingAlternatives fork notice:** This repository is a fork of
-> [`jpillora/chisel`](https://github.com/jpillora/chisel) with the addition
-> of coordinator-callback hooks (`OnRemoteBound` / `OnRemoteUnbound`,
-> `DisconnectReason`) for externally-managed session lifecycles. The Go
-> module path is retained as `github.com/jpillora/chisel` to minimize
-> upstream-merge churn — this is intentional, not abandoned. See
-> [`docs/superpowers/specs/2026-05-07-chisel-fork-coordinator-callbacks-design.md`](docs/superpowers/specs/2026-05-07-chisel-fork-coordinator-callbacks-design.md)
-> for the design rationale and `bastion/docs/chisel-fork-contract.md` in
-> the bastion repo for the consumer contract.
+> **Fork notice:** This repository is a fork of
+> [`jpillora/chisel`](https://github.com/jpillora/chisel) that adds
+> tunnel lifecycle callbacks (`OnRemoteBound` / `OnRemoteUnbound`,
+> `DisconnectReason`) for externally managed sessions. The Go module path
+> is kept as `github.com/jpillora/chisel` on purpose, to keep upstream
+> merges simple.
 
 Chisel is a fast TCP/UDP tunnel, transported over HTTP, secured via SSH. Single executable including both client and server. Written in Go (golang). Chisel is mainly useful for passing through firewalls, though it can also be used to provide a secure endpoint into your network.
 
